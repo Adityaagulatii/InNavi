@@ -1,0 +1,12 @@
+nav_env/Lib/
+nav_env/Scripts/
+nav_env/share/
+nav_env/etc/
+nav_env/pyvenv.cfg
+
+# Byte-compiled / cache
+__pycache__/
+*.py[cod]
+
+# OS files
+.DS_Store
