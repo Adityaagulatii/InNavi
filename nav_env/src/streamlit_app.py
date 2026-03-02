@@ -3,10 +3,14 @@ import networkx as nx
 import json
 import math
 import re
+import time
 import numpy as np
+import cv2
 from PIL import Image, ImageDraw
 from streamlit_drawable_canvas import st_canvas
 import easyocr
+import urllib.request
+import threading
 
 st.set_page_config(page_title="Navi Grid", layout="wide")
 
@@ -84,25 +88,65 @@ def load_ocr():
     return easyocr.Reader(["en"], gpu=False)
 
 def normalize(text):
-    """Strip spaces/dashes/dots and uppercase — e.g. 'G 429' → 'G429'"""
     return re.sub(r"[\s\-\.]", "", text).upper()
+
+def get_substrings(text, min_len=3):
+    """Generate all substrings of length >= min_len from a normalized text."""
+    text = normalize(text)
+    subs = set()
+    for i in range(len(text)):
+        for j in range(i + min_len, len(text) + 1):
+            subs.add(text[i:j])
+    return subs
 
 def match_ocr_to_node(ocr_texts, node_labels):
     """
-    Try to match any OCR result against node labels.
-    Returns the best matching node label or None.
+    Aggressively match OCR results against node labels using substrings.
+    e.g. '32-G415' detected as '415', '15', 'G41' all match node 'G415'
     """
-    norm_labels = {normalize(lbl): lbl for lbl in node_labels}
+    # Build substring sets for each node label
+    node_substrings = {}
+    for lbl in node_labels:
+        node_substrings[lbl] = get_substrings(lbl, min_len=3)
+
     for text in ocr_texts:
         norm_text = normalize(text)
-        # Exact match after normalization
-        if norm_text in norm_labels:
-            return norm_labels[norm_text]
-        # Partial match — OCR text contained in a label or vice versa
-        for norm_lbl, orig_lbl in norm_labels.items():
-            if norm_text in norm_lbl or norm_lbl in norm_text:
-                return orig_lbl
+        ocr_subs  = get_substrings(norm_text, min_len=3)
+
+        for lbl, lbl_subs in node_substrings.items():
+            # Check if any OCR substring matches any label substring
+            if ocr_subs & lbl_subs:  # intersection
+                return lbl
+
     return None
+
+def grab_frame(ip_url):
+    """Grab a single frame from IP Webcam."""
+    try:
+        url = f"http://{ip_url}/shot.jpg"
+        img_resp = urllib.request.urlopen(url, timeout=3)
+        img_array = np.array(bytearray(img_resp.read()), dtype=np.uint8)
+        frame = cv2.imdecode(img_array, -1)
+        return frame
+    except Exception as e:
+        return None
+
+def run_ocr_on_frame(frame, target_nodes):
+    """Run EasyOCR on a frame and match against target nodes."""
+    reader = load_ocr()
+    small  = cv2.resize(frame, (640, 480))
+    rgb    = cv2.cvtColor(small, cv2.COLOR_BGR2RGB)
+    results = reader.readtext(rgb)
+    texts   = [r[1] for r in results]
+    matched = match_ocr_to_node(texts, target_nodes)
+    # Draw boxes on frame for visual feedback
+    for (bbox, text, conf) in results:
+        pts = np.array(bbox, dtype=np.int32)
+        color = (0,255,0) if matched and normalize(text) in normalize(matched) else (255,165,0)
+        cv2.polylines(frame, [pts], True, color, 2)
+        cv2.putText(frame, text, tuple(pts[0]),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
+    return matched, texts, frame
 
 # ════════════════════════════════════════════════════════════════════════════
 # SIDEBAR
@@ -238,6 +282,24 @@ with st.sidebar:
         node_names = list(st.session_state.nodes.keys())
         ref_label = get_reference_node(st.session_state.nodes)
         st.info(f"📍 Reference node: **{ref_label}**")
+
+        # IP Webcam URL input
+        st.markdown("**📱 IP Webcam**")
+        ip_url = st.text_input("Phone camera IP", 
+                               value=st.session_state.get("ip_url", "10.235.152.48:8080"),
+                               placeholder="e.g. 10.235.152.48:8080",
+                               key="ip_url_input")
+        st.session_state["ip_url"] = ip_url
+
+        # Test connection
+        if st.button("Test Camera 🔗", key="test_cam"):
+            frame = grab_frame(ip_url)
+            if frame is not None:
+                st.success("✅ Camera connected!")
+                rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                st.image(rgb, caption="Live preview", width=200)
+            else:
+                st.error("❌ Can't reach camera — check IP and WiFi")
 
         if len(node_names) >= 2:
             nav_nodes = [n for n in node_names if n != ref_label]
@@ -395,39 +457,65 @@ if st.session_state.directions:
 
         st.divider()
 
-        # ── OCR Camera Checkpoint ─────────────────────────────────────────────
-        st.markdown(f"#### 📷 Scan room sign to confirm you're at **{to}**")
-        st.caption("Point your camera at the room number on the wall")
+        # ── Live IP Webcam OCR ────────────────────────────────────────────────
+        st.divider()
+        ip_url = st.session_state.get("ip_url", "")
+        remaining_nodes = st.session_state.path[current_step+1:]
 
-        camera_img = st.camera_input("Scan room sign", label_visibility="collapsed")
+        if not ip_url:
+            st.warning("⚠️ Set your IP Webcam address in the sidebar first")
+        else:
+            st.markdown(f"#### 📷 Looking for **{to}** — point camera at room sign")
 
-        if camera_img:
-            with st.spinner("Reading sign..."):
-                reader = load_ocr()
-                img_array = np.array(Image.open(camera_img).convert("RGB"))
-                results = reader.readtext(img_array)
-                ocr_texts = [res[1] for res in results]
-                st.caption(f"OCR detected: `{ocr_texts}`")
+            # Live feed placeholder
+            frame_placeholder = st.empty()
+            status_placeholder = st.empty()
+            scan_btn_col, stop_col = st.columns(2)
 
-                # Only try to match against nodes still ahead in path
-                remaining_nodes = st.session_state.path[current_step+1:]
-                matched = match_ocr_to_node(ocr_texts, remaining_nodes)
+            scanning = st.session_state.get("scanning", False)
 
-                if matched == to:
-                    st.success(f"✅ Confirmed! You're at **{matched}** — moving to next step")
-                    st.session_state.current_step += 1
-                    st.session_state.ocr_status = f"✅ Reached {matched}"
+            with scan_btn_col:
+                if st.button("▶️ Start Scanning", key="start_scan", 
+                             disabled=scanning, use_container_width=True):
+                    st.session_state.scanning = True
                     st.rerun()
-                elif matched:
-                    # Detected a node but not the expected one — jump to it
-                    new_idx = st.session_state.path.index(matched) - 1
-                    st.warning(f"⚠️ Detected **{matched}** — updating position")
-                    st.session_state.current_step = max(0, new_idx)
-                    st.session_state.ocr_status = f"⚠️ Jumped to {matched}"
+            with stop_col:
+                if st.button("⏹ Stop", key="stop_scan",
+                             disabled=not scanning, use_container_width=True):
+                    st.session_state.scanning = False
                     st.rerun()
-                else:
-                    st.error(f"❌ Couldn't read a room sign — try again")
-                    st.session_state.ocr_status = "❌ No match"
+
+            if scanning:
+                matched = None
+                attempt = 0
+                while True:
+                    attempt += 1
+                    frame = grab_frame(ip_url)
+                    if frame is None:
+                        status_placeholder.error("❌ Lost camera connection — check IP Webcam is running")
+                        st.session_state.scanning = False
+                        break
+
+                    matched, texts, annotated = run_ocr_on_frame(frame.copy(), remaining_nodes)
+                    rgb = cv2.cvtColor(annotated, cv2.COLOR_BGR2RGB)
+                    frame_placeholder.image(rgb, caption=f"Scan {attempt} — detected: {texts}",
+                                            width=600)
+
+                    if matched:
+                        st.session_state.scanning = False
+                        if matched == to:
+                            status_placeholder.success(f"✅ Found **{matched}** — moving to next step!")
+                            st.session_state.current_step += 1
+                        else:
+                            new_idx = max(0, st.session_state.path.index(matched) - 1)
+                            status_placeholder.warning(f"⚠️ Detected **{matched}** — updating position")
+                            st.session_state.current_step = new_idx
+                        time.sleep(1)
+                        st.rerun()
+                        break
+                    else:
+                        status_placeholder.info(f"🔄 Scan {attempt} — still looking for **{to}**...")
+                        time.sleep(0.5)
 
         # Manual override — in case OCR fails
         st.caption("Or confirm manually:")
