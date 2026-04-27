@@ -2,6 +2,8 @@
 
 Real-time indoor navigation using computer vision. The system detects aisle signs, ArUco markers, and shelf products from a webcam feed and updates a live minimap to guide users through a store.
 
+**Live demo:** https://frontend-virid-pi-57.vercel.app
+
 ---
 
 ## Repository Structure
