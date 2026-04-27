@@ -1,168 +1,171 @@
-# NavIn — Indoor Navigation System
+# InNavi — Indoor Navigation System
 
-> Turn-by-turn indoor navigation using a floor plan image and a live camera feed. No beacons, no WiFi fingerprinting, no special hardware required.
+Real-time indoor navigation using computer vision. The system detects aisle signs, ArUco markers, and shelf products from a webcam feed and updates a live minimap to guide users through a store.
 
 ---
 
-## What It Does
+## Repository Structure
 
-NavIn is a smartphone-based indoor navigation system that provides turn-by-turn directions inside buildings where GPS is unavailable.
+```
+InNavi/
+├── frontend/                  React web app (store map + navigation)
+└── cv_testing/
+    ├── sign_detection/        EasyOCR aisle sign reader + minimap
+    ├── marker/                ArUco marker detector + minimap
+    └── product_detection/     YOLOv8 shelf product detector
+```
 
-- Upload a floor plan image and annotate it with nodes and edges
-- Save the navigation graph as JSON — reload it anytime, no re-annotation needed
-- A* pathfinding computes the optimal route
-- Turn-by-turn directions with landmark hints: *"Turn right — look for G415 on your right"*
-- Live camera feed (via IP Webcam app) scans room signs to confirm checkpoints
-- CLAHE, gamma correction, and sharpening preprocess frames for dark corridors
-- Aggressive substring OCR matching handles partial sign text like `"415"` from `"32-G415"`
-- Live minimap updates current position on the floor plan in real time
+---
+
+## Frontend
+
+Interactive store map built with React + Vite. Works as a standalone demo — no backend required.
+
+**Features**
+- Store map with all aisles rendered from embedded graph data
+- Demo navigation mode (Dijkstra + nearest-neighbor routing)
+- Pipeline tab for live CV feed (requires backend)
+
+**Setup**
+```bash
+cd frontend
+npm install
+npm run dev
+```
+
+**Deploy to Vercel**
+1. Import this repo on [vercel.com](https://vercel.com)
+2. Set root directory to `frontend`
+3. Build command: `npm run build` | Output: `dist`
+4. Leave `VITE_API_URL` blank for demo mode, or point it at your backend
+
+---
+
+## CV Testing Modules
+
+### Prerequisites
+
+```bash
+pip install opencv-contrib-python easyocr ultralytics torch torchvision transformers pillow
+```
+
+> YOLO model weights (`yolov8n.pt`) are downloaded automatically on first run. Not included in this repo.
+
+---
+
+### Sign Detection — `cv_testing/sign_detection/`
+
+Reads aisle signs using EasyOCR and updates a live minimap as you walk through the store.
+
+| File | Description |
+|---|---|
+| `ocr_webcam_test.py` | Webcam feed + OCR + live minimap. Logs detection timing to CSV. |
+| `minimap_ocr.py` | Minimap-only variant, no external CSV output. |
+
+**Run**
+```bash
+cd cv_testing/sign_detection
+python ocr_webcam_test.py
+```
+
+**How it works**
+- EasyOCR scans every 3 frames (GPU-accelerated) for aisle labels like `A152`, `A100`
+- Matched labels update the "You are here" position on the minimap
+- Detection time and map update time are logged to `ocr_results_log.csv`
+
+---
+
+### Marker Detection — `cv_testing/marker/`
+
+Uses printed ArUco markers as aisle position beacons. Faster and more reliable than OCR in low-light environments.
+
+| File | Description |
+|---|---|
+| `aruco_detector.py` | Webcam + ArUco detection + live minimap |
+| `aruco_minimap.py` | Route-aware variant with timing logs |
+| `generate_markers.py` | Generates a printable marker sheet (10 markers, 2×5 grid) |
+
+**Run**
+```bash
+cd cv_testing/marker
+
+# Generate and print markers
+python generate_markers.py        # saves marker_sheet.png
+
+# Run the detector
+python aruco_detector.py
+```
+
+**Marker → Aisle mapping**
+
+| Marker ID | Aisle | Location |
+|---|---|---|
+| 0 | A152 | Bakery |
+| 1 | A100 | Dairy |
+
+Hold the printed marker in front of the webcam. The minimap updates instantly when detected. Detection timing is logged to `aruco_detector_log.csv`.
+
+---
+
+### Product Detection — `cv_testing/product_detection/`
+
+Detects grocery products on shelves using YOLOv8. Divides the frame into a 3×3 zone grid (Left/Center/Right × Top/Mid/Bot) and lists what's in each zone.
+
+| File | Description |
+|---|---|
+| `shelf_detector.py` | Live webcam shelf detector |
+| `test_image.py` | Run detection on a static image |
+| `grocery_preview.png` | Sample test image (fruits + vegetables) |
+| `result.jpg` | Detection output for the sample image |
+
+**Run**
+```bash
+cd cv_testing/product_detection
+
+# Live webcam
+python shelf_detector.py
+
+# Static image test
+python test_image.py
+```
+
+**Sample output**
+
+![Detection result](cv_testing/product_detection/result.jpg)
+
+The detector uses `yolov8n.pt` (COCO classes). For best results, place the camera facing a shelf section squarely.
+
+---
+
+## Demo Route
+
+All CV modules share the same demo route used for minimap navigation:
+
+```
+Entrance → A152 (Bakery) → A100 (Dairy) → A1 → A2 → A100 → A34 (Yogurt) → A101 (Meat) → Checkout
+```
+
+This matches a milk + eggs + pasta shopping path through the store.
+
+---
+
+## Controls
+
+| Key | Action |
+|---|---|
+| `Q` | Quit any CV script |
+
+All webcam windows open fullscreen automatically.
 
 ---
 
 ## Tech Stack
 
-| Component | Tool |
+| Layer | Technology |
 |---|---|
-| UI | Streamlit |
-| Pathfinding | NetworkX (A*) |
-| Computer Vision | OpenCV |
-| OCR | EasyOCR |
-| Floor Plan Annotation | streamlit-drawable-canvas |
-| Camera Stream | IP Webcam (Android) |
-| Language | Python 3.10+ |
-
----
-
-## Setup
-
-### 1. Clone the repo
-```bash
-git clone https://github.com/your-username/NavIn.git
-cd NavIn
-```
-
-### 2. Create and activate a virtual environment
-```bash
-python -m venv nav_env
-
-# Windows
-nav_env\Scripts\activate
-
-# Mac/Linux
-source nav_env/bin/activate
-```
-
-### 3. Install dependencies
-```bash
-pip install -r requirements.txt
-```
-
-### 4. Run the app
-```bash
-streamlit run app.py --server.address 0.0.0.0
-```
-
----
-
-## Usage
-
-### First Time — Annotate Your Floor Plan
-
-1. Upload your floor plan image (PNG/JPG)
-2. Select **✏️ Annotate manually**
-3. **Place Node** mode → click on a room → give it a name (e.g. `G415`)
-4. **Draw Edge** mode → click two nodes to connect them
-5. Hit **💾 Download floor_graph.json** to save your graph
-6. Click **➡️ Done — Go to Navigate**
-
-> ⚠️ Always place your **reference node first** — this defines the building entry point and sets the initial facing direction for all navigation.
-
-### Every Time After — Load Saved Map
-
-1. Upload your floor plan image
-2. Select **📂 Load existing JSON**
-3. Upload your `floor_graph.json`
-4. App jumps straight to Navigate mode ✅
-
-### Navigate
-
-1. Enter your **IP Webcam address** (e.g. `192.168.X.X:8080`)
-2. Hit **Test Camera 🔗** to verify connection
-3. Select your **destination** from the dropdown
-4. Hit **Find Path 🔍**
-5. Follow the step-by-step directions
-6. At each checkpoint, hit **▶️ Start Scanning** — point your camera at the room sign
-7. OCR auto-confirms your location and advances to the next step
-
----
-
-## Camera Setup (IP Webcam)
-
-1. Install **IP Webcam** on your Android phone (free on Play Store)
-2. Open the app → tap **Start Server**
-3. Note the IP address shown on screen (e.g. `192.168.X.X:8080`)
-4. Make sure your phone and laptop are on the **same WiFi network**
-5. Enter this IP in the NavIn sidebar
-
----
-
-## Project Structure
-```
-NavIn/
-├── app.py                 # Main Streamlit app
-├── requirements.txt       # Python dependencies
-├── floor_graph.json       # Saved node graph (generated by you)
-├── .gitignore
-└── README.md
-```
-
----
-
-## How Directions Work
-
-NavIn computes directions using **vector geometry**:
-```
-Reference node → first node = initial facing direction
-At each step:
-  cross product of (facing vector vs next vector) → left / right / straight / turn around
-  facing vector updates after each step
-```
-
-This means directions are always relative to how you just walked — no manual compass input needed.
-
----
-
-## OCR Matching
-
-Room signs often have building prefixes (e.g. `32-G415`). NavIn handles this with aggressive substring matching:
-```
-Node label "G415" → substrings: {"G41", "415", "G415" ...}
-OCR reads "32-G415" → substrings: {"32G", "G41", "415" ...}
-Intersection found → ✅ match
-```
-
-Any partial read of the sign (e.g. `"415"`, `"G41"`, `"32G4"`) will correctly resolve to the right node.
-
----
-
-## Known Limitations
-
-- Direction accuracy depends on the assumption that the user walked in a straight line from the previous node
-- OCR performance degrades in very dark or blurry conditions (CLAHE preprocessing helps)
-- Node coordinates are tied to a specific floor plan image — rotating or rescaling the image after annotation will misalign nodes
-- Currently single-floor only — multi-floor support planned
-
----
-
-## What's Next
-
-- [ ] Step 1 automation — edge detection to auto-extract nodes from floor plan
-- [ ] Multi-floor support with staircase/elevator nodes
-- [ ] VLM-based localization as fallback when OCR fails
-- [ ] Real-world distance calibration (px → meters)
-
----
-
-## Built At
-
-Sundai
+| Frontend | React, Vite, CSS |
+| Sign detection | EasyOCR, OpenCV |
+| Marker detection | OpenCV ArUco (DICT_4X4_50) |
+| Product detection | YOLOv8n (Ultralytics) |
+| Depth estimation | MiDaS (available locally, not in this repo) |
+| Floor segmentation | SegFormer-b0 ADE20K (available locally, not in this repo) |

@@ -1,12 +1,26 @@
-nav_env/Lib/
-nav_env/Scripts/
-nav_env/share/
-nav_env/etc/
-nav_env/pyvenv.cfg
-
-# Byte-compiled / cache
+# Python
 __pycache__/
 *.py[cod]
+*.pyo
+*.pyd
 
-# OS files
+# Virtual environments
+nav_env/
+venv/
+env/
+.venv/
+
+# YOLO model weights (too large for git)
+*.pt
+*.onnx
+
+# Runtime-generated logs & outputs
+*.csv
+
+# Node / frontend
+frontend/node_modules/
+frontend/dist/
+
+# OS
 .DS_Store
+Thumbs.db
