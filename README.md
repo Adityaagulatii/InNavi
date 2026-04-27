@@ -169,5 +169,3 @@ All webcam windows open fullscreen automatically.
 | Sign detection | EasyOCR, OpenCV |
 | Marker detection | OpenCV ArUco (DICT_4X4_50) |
 | Product detection | YOLOv8n (Ultralytics) |
-| Depth estimation | MiDaS (available locally, not in this repo) |
-| Floor segmentation | SegFormer-b0 ADE20K (available locally, not in this repo) |
